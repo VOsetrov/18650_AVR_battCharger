@@ -30,7 +30,7 @@ static inline void adcInit();
 static inline void adc_chSelect
   (enum adcChan channel);
 
-static inline void batVoltage
+static inline bool batVoltage
   (enum adcChan channel, battery *b);
 
 static inline void ledControl
@@ -40,16 +40,17 @@ int main(void)
 {
   portInit();
   adcInit();
-
+/*
   volatile enum adcChan 
     adcState = ADC0;
+  adc_chSelect(adcState);
+*/
+
   bt1.flag = false;
-//  PORTB |= (1<<PORT2);                // Turn on the Red LED (5V)
 
   sei();
 
   while(1) {
-    ledControl(&bt1);
   }
   return 0;
 }
@@ -60,7 +61,7 @@ static inline void portInit() {
   DDRB |= (1<<DDB0);                  // Set the LED ports to write
   DDRB |= (1<<DDB1);                  // ...
   DDRB |= (1<<DDB2);                  // Set the PowerSwitch to write
-  PORTB &= ~(1<<PORTB0);              // Set 0V to PowerSwitch port (off)
+  PORTB |= (1<<PORTB0);               // Set 0V to PowerSwitch port (off)
   PORTB &= ~(1<<PORTB2);              // Set the RedLED ports to 0V (off)
   PORTB &= ~(1<<PORTB1);              // Set the GreenLED ports to 0V (off)
 }
@@ -74,6 +75,11 @@ static inline void adcInit() {
   ADMUX &= ~(1<<REFS1);               // Set the 5 voltage reference from AVcc
   ADMUX |= (1<<REFS0);                // ...
   ADMUX &= ~(1<<ADLAR);               // right adjusten of the data presentation
+
+  volatile enum adcChan 
+    adcState = ADC0;                  // Set the number of ADC channel
+  adc_chSelect(adcState);             // Turn on the ADC channel
+
   ADCSRA |= (1<<ADIE);                // ADC interrupt enable
   ADCSRA |= (1<<ADSC);                // Start the conversion
 }
@@ -106,8 +112,11 @@ static inline void ledControl(battery *b) {
   } 
 }
 
-static inline void batVoltage         // Saving measurments to the variable
+static inline bool batVoltage         // Saving measurments to the variable
   (enum adcChan channel, battery *b) {
+  if(channel == 0 && ADC == 0) {
+    return false;
+  };
   switch(channel) {
     case ADC0:
       b->vMeas_1 = ADC;
@@ -120,16 +129,22 @@ static inline void batVoltage         // Saving measurments to the variable
       b->flag = true;                 // When the all measurments are finished
       break;                          // flag will be true
   }
+  return true;
 }
 
 
 ISR(ADC_vect) {
+  if(batVoltage(adcState, &bt1)) {
+    ledControl(&bt1);                   // Perform charge control
+    adcState++;                         // Set flag to the next channel
+  };
+//  batVoltage(adcState, &bt1);         // Writing a voltage measurment
+
   if(adcState > ADC1) {
     adcState = ADC0;
   };
+
   adc_chSelect(adcState);             // Switch to the next channel
-  batVoltage(adcState, &bt1);         // Making a battery measurment
-  adcState++;                         // Set flag to the next channel
 }
 
 
