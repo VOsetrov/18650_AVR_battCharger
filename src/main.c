@@ -16,6 +16,12 @@ enum adcChan {
   ADC1,
 } adcState;                           // ADC channel current state
 
+enum ledList {
+  GREEN,                              // The battery is full of charge
+  RED,                                // The battry is low of charge
+  BLUE,                               // Power-seurce is ON
+} led;
+
 typedef struct battery_voltage {
   uint16_t vMeas_1;                   // First measurment
   uint16_t vMeas_2;                   // Second measurment
@@ -24,9 +30,12 @@ typedef struct battery_voltage {
 } battery; 
 
 static battery bt1 = {0};
+static bool power = false;
 
 static inline void portInit();
 static inline void adcInit();
+
+static inline bool powerMonitor();       // Power-source monitor
 static inline void adc_chSelect
   (enum adcChan channel);
 
@@ -51,6 +60,9 @@ int main(void)
   sei();
 
   while(1) {
+    if(!power) {
+      sei();
+    }
   }
   return 0;
 }
@@ -60,10 +72,11 @@ static inline void portInit() {
   DDRC &= ~(1<<DDC1);                 // Set the ADC1 port to read
   DDRB |= (1<<DDB0);                  // Set the LED ports to write
   DDRB |= (1<<DDB1);                  // ...
-  DDRB |= (1<<DDB2);                  // Set the PowerSwitch to write
-  PORTB |= (1<<PORTB0);               // Set 0V to PowerSwitch port (off)
-  PORTB &= ~(1<<PORTB2);              // Set the RedLED ports to 0V (off)
-  PORTB &= ~(1<<PORTB1);              // Set the GreenLED ports to 0V (off)
+  DDRB |= (1<<DDB2);                  // ...
+  DDRB |= (1<<DDB3);                  // Set the PowerSwitch to write
+  PORTB |= (1<<PORTB0);               // Set 5V to PowerSwitch port (on)
+  PORTB &= ~(1<<RED);                 // Set the RedLED ports to 0V (off)
+  PORTB &= ~(1<<GREEN);               // Set the GreenLED ports to 0V (off)
 }
 
 static inline void adcInit() {
@@ -135,16 +148,29 @@ static inline bool batVoltage         // Saving measurments to the variable
 
 ISR(ADC_vect) {
   if(batVoltage(adcState, &bt1)) {
+    power = true;
     ledControl(&bt1);                   // Perform charge control
     adcState++;                         // Set flag to the next channel
+    if(adcState > ADC1) {
+      adcState = ADC0;
+    };
+    adc_chSelect(adcState);             // Switch to the next channel
+  } else {
+    adcState = ADC0;
+    adc_chSelect(adcState);
+    bt1.vMeas_1 = 0;
+    bt1.vMeas_2 = 0;
+    bt1.vTotal = 0;
+    bt1.flag = false;
+    power = false;
+    PORTB &= ~(1<<PORTB0);
+    PORTB &= ~(1<<PORTB1);
+    PORTB |= (1<<PORTB3);               // Turn on the power-off LED
+    cli();
   };
 //  batVoltage(adcState, &bt1);         // Writing a voltage measurment
 
-  if(adcState > ADC1) {
-    adcState = ADC0;
-  };
 
-  adc_chSelect(adcState);             // Switch to the next channel
 }
 
 
