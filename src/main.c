@@ -7,8 +7,9 @@ enum {
   FOSC          = 16000000,           // Microcontroller frequency
   VREF          = 5000,               // Reference voltage mV
   ADC_BIT       = 1024,               //
+  MAX_I         = 60,                 // Number of measurments (16 bit var/1024)
   LOW_CHARGE    = 553,                // ADC parameter equal to 2.7V
-  HIGH_CHARGE   = 840,                // ADC parameter equal to 4.2V
+  HIGH_CHARGE   = 840,                // ADC parameter equal to 4.1V
 };
 
 enum ledList {
@@ -27,23 +28,23 @@ enum state {
 };
 
 typedef struct battery_voltage {
+
   enum adcChan {
     ADC0,                             // Channel status ADC0
     ADC1,                             // Channel status ADC1
   } chan;
+
   uint16_t vMeas_1;                   // First measurment
   uint16_t vMeas_2;                   // Second measurment
   uint16_t vTotal;                    // Voltage calculations result
-  bool flag;                          // Measurment status (true/false)
+  uint8_t max_i;                      // Maximal number of measurments
+  uint8_t i;                          // Counter of measurment iterations
 } battery; 
 
-static battery bt1 = {0};             // Initialisation of battery_voltage
+static battery bt1;                   // Initialisation of battery_voltage
 
 static inline void portInit();
 static inline void adcInit();
-static inline bool pwMonitor
-  (enum adcChan channel,
-   uint16_t adcRes);                  // Power-source monitor
 
 static inline void charging
   (bool state);
@@ -51,11 +52,8 @@ static inline void charging
 static inline void adc_chSelect       
   (enum adcChan channel);             // Init a selected ADC channel
 
-static inline void batVoltage
-  (battery *b, uint16_t result);
-
-static inline void chargeCtrl 
-  (battery *b, bool pw);
+static inline bool batVoltage
+  (battery *b, uint16_t adcData);
 
 static inline void mosfetPw
   (bool state);
@@ -70,7 +68,8 @@ int main(void)
   portInit();
   adcInit();
 
-  bt1.flag = false;
+  PORTB |= (1<<POWER);                // Set 5V to PowerSwitch port (on)
+  bt1.max_i = MAX_I;                  
 
   while(1) {
   }
@@ -79,26 +78,36 @@ int main(void)
 
 ISR(ADC_vect) {
   uint16_t result = adc();            // Getting ADC measurment result
+  bool flag = batVoltage(&bt1,
+                         result);
+  uint16_t voltage;
 
-  bool power = pwMonitor
-    (bt1.chan, result);               // Check the Power State 
-
-  if(power) {
-    batVoltage(&bt1, result);         // Saving the measurments
-    chargeCtrl(&bt1, power);          // Perform charge control
-    bt1.chan++;                       // Set flag to the next channel
-    if(bt1.chan > ADC1) {
-      bt1.chan = ADC0;
+  if(flag) {
+    voltage = bt1.vTotal;
+    if(voltage < LOW_CHARGE) {
+      mosfetPw(OFF);
+      srcPw_LED(OFF);
+      PORTB &= ~(1<<GREEN);           // Turn off the Green LED (0V)
+      PORTB &= ~(1<<RED);             // Turn on the Red LED (5V)
+    } else if(voltage >= HIGH_CHARGE)
+    {
+      charging(OFF);
+    } else if((voltage < HIGH_CHARGE)
+             & (voltage >= LOW_CHARGE)) 
+    {
+      charging(ON);
     };
-    adc_chSelect(bt1.chan);           // Switch to the next channel
-  } else {
-    srcPw_LED(OFF);                   // Turn off the power LED
-    bt1.chan = ADC0;
-    adc_chSelect(bt1.chan);
+
     bt1.vMeas_1 = 0;
     bt1.vMeas_2 = 0;
     bt1.vTotal = 0;
-    bt1.flag = false;
+
+  } else {
+    bt1.chan++;
+    if(bt1.chan > ADC1) {
+      bt1.chan = ADC0;
+    };
+    adc_chSelect(bt1.chan);           // Select the ADC channel
   };
 
   ADCSRA |= 1<<ADSC;                  // Start the ADC conversion
@@ -111,7 +120,6 @@ static inline void portInit() {
   DDRB |= (1<<DDB1);                  // ...
   DDRB |= (1<<DDB2);                  // ...
   DDRB |= (1<<POWER);                 // Set the PowerSwitch to write
-  PORTB |= (1<<POWER);                // Set 5V to PowerSwitch port (on)
   PORTB &= ~(1<<RED);                 // Set the RedLED port to 0V (off)
   PORTB &= ~(1<<GREEN);               // Set the GreenLED port to 0V (off)
   PORTB &= ~(1<<BLUE);                // Set the BlueLED port to 0V (off)
@@ -143,6 +151,7 @@ static inline uint16_t adc() {
 
 static inline void adc_chSelect
   (enum adcChan channel) {
+
   ADMUX &= ~(0xF);                    // Set the MUX bits to the 0
   switch(channel) {                   // Switch channel for measurment
     case ADC0:
@@ -174,6 +183,7 @@ static inline void srcPw_LED
 
 static inline void charging
   (bool state) {
+    srcPw_LED(ON);
   if(state) {
     mosfetPw(ON);  
     PORTB &= ~(1<<GREEN);             // Turn off the Green LED (0V)
@@ -185,53 +195,29 @@ static inline void charging
   };
 }
 
-static inline void chargeCtrl
-  (battery *b, bool pw) {
-
-  battery bt = *b;
-
-  if(pw) {
-    srcPw_LED(ON);
-    if(bt.flag) {
-      if(bt.vTotal >= HIGH_CHARGE) {
-        charging(OFF);
-      } else if
-        (bt.vTotal <= HIGH_CHARGE) {
-        charging(ON);
-      };
-    }; 
-  } else {
-    srcPw_LED(OFF);
-    PORTB &= ~(1<<RED);             // Turn off the Red LED (0V)
-    PORTB &= ~(1<<GREEN);           // Turn off the Green Led (5V)
-  };
-}
-
-static inline void batVoltage 
+static inline bool batVoltage 
   (battery *b,
-   uint16_t result) {
+   uint16_t adcData) {
 
   enum adcChan channel = b->chan;
+  uint8_t MAX = b->max_i; 
+
+  if(b->i == MAX) {
+    b->vTotal /= MAX;
+    b->i = 0;
+    return true;                    // All measurments was finished
+  };
 
   switch(channel) {
     case ADC0:
-      b->vMeas_1 = result;            // Saving the first measurment
-      b->flag = false;                // Battery voltage measurment not 
-      break;                          // finished yet.
+      b->vMeas_1 = adcData;         // Saving the first measurment
+      break;                        // finished yet.
     case ADC1:
-      b->vMeas_2 = result;            // Saving the second measurment
-      b->vTotal = b->vMeas_1 - 
-                    b->vMeas_2;       // Finding the current battery voltage
-      b->flag = true;                 // All measurments was finished
-      break;                          // ...
+      b->vMeas_2 = adcData;         // Saving the second measurment
+      b->vTotal += (b->vMeas_1 - 
+        b->vMeas_2);                // Finding the current battery voltage
+      b->i++;
+      break;
   }
+  return false;                     // Voltage measurments not finished yet.
 }
-
-static inline bool pwMonitor
-  (enum adcChan channel, uint16_t adcRes) {
-  if(channel == 0 && adcRes == 0) {
-    return false;
-  } else { return true; };
-}
-
-
