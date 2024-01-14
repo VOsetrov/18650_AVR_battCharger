@@ -27,13 +27,14 @@ enum state {
   ON,
 };
 
+enum adcChan {
+  ADC0,                               // Channel status ADC0
+  ADC1,                               // Channel status ADC1
+};
+
 typedef struct battery_voltage {
 
-  enum adcChan {
-    ADC0,                             // Channel status ADC0
-    ADC1,                             // Channel status ADC1
-  } chan;
-
+  enum adcChan chan;
   uint16_t vMeas_1;                   // First measurment
   uint16_t vMeas_2;                   // Second measurment
   uint16_t vTotal;                    // Voltage calculations result
@@ -68,8 +69,8 @@ int main(void)
   portInit();
   adcInit();
 
-  PORTB |= (1<<POWER);                // Set 5V to PowerSwitch port (on)
   bt1.max_i = MAX_I;                  
+  PORTB |= (1<<POWER);                // Set 5V to PowerSwitch port (on)
 
   while(1) {
   }
@@ -103,10 +104,14 @@ ISR(ADC_vect) {
     bt1.vTotal = 0;
 
   } else {
-    bt1.chan++;
-    if(bt1.chan > ADC1) {
-      bt1.chan = ADC0;
-    };
+    switch(bt1.chan) {
+      case ADC0:
+        bt1.chan = ADC1;
+        break;
+      case ADC1:
+        bt1.chan = ADC0;
+        break;
+        };
     adc_chSelect(bt1.chan);           // Select the ADC channel
   };
 
@@ -116,9 +121,9 @@ ISR(ADC_vect) {
 static inline void portInit() {
   DDRC &= ~(1<<DDC0);                 // Set the ADC0 port to read
   DDRC &= ~(1<<DDC1);                 // Set the ADC1 port to read
-  DDRB |= (1<<DDB0);                  // Set the LED ports to write
-  DDRB |= (1<<DDB1);                  // ...
-  DDRB |= (1<<DDB2);                  // ...
+  DDRB |= (1<<GREEN);                 // Set the LED ports to write
+  DDRB |= (1<<RED);                   // ...
+  DDRB |= (1<<BLUE);                  // ...
   DDRB |= (1<<POWER);                 // Set the PowerSwitch to write
   PORTB &= ~(1<<RED);                 // Set the RedLED port to 0V (off)
   PORTB &= ~(1<<GREEN);               // Set the GreenLED port to 0V (off)
