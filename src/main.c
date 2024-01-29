@@ -7,9 +7,9 @@ enum {
   FOSC          = 16000000,           // Microcontroller frequency
   VREF          = 5000,               // Reference voltage mV
   ADC_BIT       = 1024,               //
-  MAX_I         = 60,                 // Number of measurments (16 bit var/1024)
-  LOW_CHARGE    = 535,                // ADC parameter equal to 2.7V
-  HIGH_CHARGE   = 831,                // ADC parameter equal to 4.2V
+  MAX_I         = 60,                 // Number of measurments (2^16 bit/1024)
+  LOW_LVL       = 535,                // ADC parameter equal to 2.7V
+  HIGH_LVL      = 831,                // ADC parameter equal to 4.2V
 };
 
 enum ledList {
@@ -34,7 +34,10 @@ typedef struct {
 
 typedef struct {
   adc_chan adc;
-  uint16_t voltage;                   // First measurment
+  uint16_t voltage;                   // Voltage measurment storage
+  uint8_t imax;                       // number of meas. iterations
+  uint8_t i;                          // current iteration
+  bool flag;                          // Iteration measurments status
 } battery; 
 
 static battery bt1;                   // Initialisation of battery structure
@@ -56,6 +59,9 @@ static inline void srcPw_LED
 
 static inline uint16_t adc(); 
 
+static inline bool bat_chargeHandler
+  (battery *bat, uint16_t(*adcRes)());
+
 int main(void)
 {
   portInit();
@@ -70,23 +76,42 @@ int main(void)
 
 ISR(ADC_vect) {
 
-  bt1.voltage = adc();                // Getting ADC measurment result
-  uint16_t voltage = bt1.voltage;
+  bool status = bat_chargeHandler
+    (&bt1, adc);
  
-  if(voltage < LOW_CHARGE) {
-    mosfetPw(OFF);
-    PORTB &= ~(1<<GREEN);             // Turn off the Green LED (0V)
-    PORTB &= ~(1<<RED);               // Turn off the Red LED (0V)
-  } else if(voltage >= HIGH_CHARGE)
-  {
-    charging(OFF);
-  } else if((voltage < HIGH_CHARGE)
-           & (voltage >= LOW_CHARGE)) 
-  {
-    charging(ON);
+  if(status) { 
+    if(bt1.voltage < LOW_LVL) {
+      mosfetPw(OFF);
+      PORTB &= ~(1<<GREEN);            // Turn off the Green LED (0V)
+      PORTB &= ~(1<<RED);              // Turn off the Red LED (0V)
+    } else if(bt1.voltage >= HIGH_LVL) 
+    {
+      charging(OFF);
+    } else if((bt1.voltage < HIGH_LVL) 
+        & (bt1.voltage >= LOW_LVL)) 
+    {
+      charging(ON);
+    };
   };
 
   ADCSRA |= 1<<ADSC;                  // Start the ADC conversion
+}
+
+static inline bool bat_chargeHandler
+  (battery *bat, uint16_t (*adcRes)()) 
+{
+  if(bat->flag) {
+    bat->voltage /= bat->imax;
+    bat->i = 0;
+    bat->flag = false;
+    return true;
+  };
+    bat->voltage += adcRes();
+    bat->i++;
+    if(bat->i == bat->imax) {
+      bat->flag = true;
+    };
+  return false;
 }
 
 static inline void portInit() {
@@ -111,6 +136,8 @@ static inline void adcInit() {
 
   bt1.adc.num = 0;                    // Init the first ADC channel 
   bt1.adc.regConf = 0x00;             // ...
+  bt1.imax = MAX_I;                   // ...
+  bt1.flag = false;                   // ...
   adc_chSelect(bt1.adc.regConf);      // Turn on the ADC channel
 
   ADCSRA |= (1<<ADIE);                // ADC interrupt enable
